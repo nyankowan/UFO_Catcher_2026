@@ -20,3 +20,9 @@ CMakeUserPresets.json
 
 # Build output
 build/
+
+# Editor / IDE
+.clangd
+.settings/
+.vscode/
+main_controller/.gitignore

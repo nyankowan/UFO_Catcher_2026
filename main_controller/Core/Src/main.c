@@ -318,7 +318,9 @@ int main(void)
     can_command_data_t com = {.id = CAN_ID_ROBOMAS_SEND};
     can_protocol_pack_robomas(&com.data, cur);
     stm_can_send(&hcan2, &com);
-    HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, state == UFO_MANUAL ? GPIO_PIN_RESET : GPIO_PIN_SET);
+    // STATUS_LED(PA5): 上下左右・キャッチのいずれかが入力されている間だけ点灯
+    bool any_input = con.left || con.right || con.up || con.down || con.cat;
+    HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, any_input ? GPIO_PIN_SET : GPIO_PIN_RESET);
     // 次のtick(1ms)まで待つ。ロボマスのFBは割り込みで受信済み
     uint32_t t = HAL_GetTick();
     while (HAL_GetTick() == t) {}

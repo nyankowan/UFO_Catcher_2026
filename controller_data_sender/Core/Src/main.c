@@ -119,10 +119,11 @@ int main(void)
     com.data.con.down  = (HAL_GPIO_ReadPin(DOWN_GPIO_Port,  DOWN_Pin)  == GPIO_PIN_RESET);
     com.data.con.cat   = (HAL_GPIO_ReadPin(CATCH_GPIO_Port, CATCH_Pin) == GPIO_PIN_RESET);
 
-    // 送信失敗(バス未接続など)の間はLED消灯
-    HAL_StatusTypeDef ret = stm_can_send(&hcan, &com);
+    stm_can_send(&hcan, &com);
+
+    // STATUS_LED: いずれかのボタンが押されている間だけ点灯
     HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin,
-                      ret == HAL_OK ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                      com.data.con.raw ? GPIO_PIN_SET : GPIO_PIN_RESET);
     HAL_Delay(SEND_PERIOD_MS);
   }
   /* USER CODE END 3 */

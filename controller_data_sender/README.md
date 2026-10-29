@@ -5,11 +5,11 @@
 
 | 用途      | STM32ピン | CubeMX設定 | Nucleo端子 |
 | ------- | ------- | -------- | -------- |
-| LEFT    | PB4     | TIM3_CH1 | D12      |
-| RIGHT   | PB5     | TIM3_CH2 | D11      |
-| UP      | PB0     | TIM3_CH3 | D3       |
-| DOWN    | PB1     | TIM3_CH4 | D6       |
-| CATCH   | PA8     | TIM1_CH1 | D9       |
+| LEFT    | PB5     | GPIO_Input |          |
+| RIGHT   | PB0     | GPIO_Input |          |
+| UP      | PA8     | GPIO_Input |          |
+| DOWN    | PB1     | GPIO_Input |          |
+| CATCH   | PB4     | GPIO_Input | 仮割当(要確認) |
 | CAN RX  | PA11    | CAN_RX   | D10      |
 | CAN TX  | PA12    | CAN_TX   | D2       |
 | STATUS_LED|PB3    |GPIO_Output| D13     |

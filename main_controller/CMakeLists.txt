@@ -48,6 +48,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../common/can.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/servo.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/robomas.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/debug.c
 )
 
 # Add include paths

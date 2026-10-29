@@ -25,6 +25,8 @@
 #include "can.h"
 #include "servo.h"
 #include "robomas.h"
+#include "debug.h"
+#include <stdio.h>
 
 /* USER CODE END Includes */
 
@@ -82,6 +84,12 @@ typedef enum {
 #define T_HOME_MAX_MS   10000
 #define T_RELEASE_MS    1000
 
+// CAN1の自己テスト: 有効にするとCAN1を内部ループバック(外部バスを使わない)にして、
+// 自分でコントローラのフレーム(0x100, 上ボタン)を送って自分で受信する。
+// n が増えて esr=0 のままなら、受信側のコード/周辺機能は正常
+// #define CAN_SELFTEST
+
+#define DEBUG_PERIOD_MS  100   // デバッグ出力の周期
 #define LOOP_PERIOD_MS   1     // ロボマスの指令/FBは1kHz
 #define CON_TIMEOUT_MS   100   // コントローラ無通信でモータ停止
 
@@ -102,6 +110,14 @@ static uint32_t con_last_rx_ms;
 static ufo_state_t state = UFO_MANUAL;
 static uint32_t state_start_ms;
 
+// デバッグ表示用: CAN1で最後に受信したフレーム
+static volatile uint32_t dbg_rx_count;
+static volatile uint32_t dbg_rx_id;
+static volatile uint8_t  dbg_rx_dlc;
+static volatile uint8_t  dbg_rx_d0;
+
+static uint8_t clk_hse_ok = 1;   // 0ならHSE起動失敗でHSIにフォールバックした
+
 static float xy_tgt[2];   // XY目標回転数
 static float xy_cmd[2];   // 加減速をかけた回転数指令
 static int32_t z_target = Z_UP_POS;
@@ -120,6 +136,7 @@ static void MX_CAN2_Init(void);
 static void can_rx_init(void);
 static void can_rx_poll(void);
 static void set_state(ufo_state_t next);
+static void debug_print(void);
 static void control_step(void);
 static void actuate(int16_t cur[4]);
 
@@ -155,6 +172,10 @@ static void can_rx_poll(void)
   uint8_t d[CAN_DLC_MAX];
   while (HAL_CAN_GetRxFifoFillLevel(&hcan1, CAN_RX_FIFO0) > 0) {
     if (HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &hdr, d) != HAL_OK) break;
+    dbg_rx_count++;
+    dbg_rx_id = (hdr.IDE == CAN_ID_STD) ? hdr.StdId : hdr.ExtId;
+    dbg_rx_dlc = hdr.DLC;
+    dbg_rx_d0 = d[0];
     if (hdr.IDE == CAN_ID_STD && hdr.StdId == CAN_ID_CONTROLLER && hdr.DLC >= 1) {
       con.raw = d[0];
       con_last_rx_ms = HAL_GetTick();
@@ -168,6 +189,29 @@ static void set_state(ufo_state_t next)
   state_start_ms = HAL_GetTick();
   if (next == UFO_GRAB) servo_set_pulse_us(SERVO_CLOSE_US);
   if (next == UFO_RELEASE) servo_set_pulse_us(SERVO_OPEN_US);
+}
+
+// 100msごとに状態を1行出力する(ノンブロッキング)
+static void debug_print(void)
+{
+  static uint32_t last_ms;
+  uint32_t now = HAL_GetTick();
+  if (now - last_ms < DEBUG_PERIOD_MS) return;
+  last_ms = now;
+
+  // ESR: LEC[6:4]=最後のエラー種別, BOFF[2], EPVF[1], EWGF[0], TEC[23:16], REC[31:24]
+  uint32_t esr = hcan1.Instance->ESR;
+  char line[192];
+  int n = snprintf(line, sizeof(line),
+      "clk=%s CAN1 n=%lu id=0x%03lX dlc=%u d0=%02X age=%lums esr=%08lX | "
+      "L%d R%d U%d D%d C%d | st=%d | fb=%d%d%d rpm=%d,%d,%d z=%ld\r\n",
+      clk_hse_ok ? "HSE" : "HSI", (unsigned long)dbg_rx_count, (unsigned long)dbg_rx_id, dbg_rx_dlc, dbg_rx_d0,
+      (unsigned long)(now - con_last_rx_ms), (unsigned long)esr,
+      con.left, con.right, con.up, con.down, con.cat, (int)state,
+      robomas_alive(0, FB_TIMEOUT_MS), robomas_alive(1, FB_TIMEOUT_MS), robomas_alive(2, FB_TIMEOUT_MS),
+      robomas_fb[0].rpm, robomas_fb[1].rpm, robomas_fb[2].rpm,
+      (long)robomas_fb[MOTOR_ARM].total);
+  if (n > 0) debug_write(line, (size_t)n);
 }
 
 static bool z_reached(void)
@@ -294,8 +338,14 @@ int main(void)
   MX_CAN1_Init();
   MX_CAN2_Init();
   /* USER CODE BEGIN 2 */
+#ifdef CAN_SELFTEST
+  HAL_CAN_DeInit(&hcan1);
+  hcan1.Init.Mode = CAN_MODE_LOOPBACK;
+  if (HAL_CAN_Init(&hcan1) != HAL_OK) Error_Handler();
+#endif
   can_rx_init();
   servo_init(SERVO_OPEN_US);
+  debug_init();
 
   /* USER CODE END 2 */
 
@@ -312,6 +362,18 @@ int main(void)
     if (HAL_GetTick() - con_last_rx_ms > CON_TIMEOUT_MS) {
       con.raw = 0;  // 通信断中はMANUALで全停止。シーケンス実行中はそのまま完了させる
     }
+    debug_print();
+#ifdef CAN_SELFTEST
+    {
+      static uint32_t last_tx_ms;
+      if (HAL_GetTick() - last_tx_ms >= 10) {
+        last_tx_ms = HAL_GetTick();
+        can_command_data_t t = {.id = CAN_ID_CONTROLLER};
+        t.data.con.up = 1;
+        stm_can_send(&hcan1, &t);
+      }
+    }
+#endif
     control_step();
     actuate(cur);
 
@@ -345,19 +407,35 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 4;
   RCC_OscInitStruct.PLL.PLLN = 60;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 2;
   RCC_OscInitStruct.PLL.PLLR = 2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    Error_Handler();
+    /* HSE(ST-LINKのMCO)が立ち上がらないときはHSIで動かす。システムクロックは同じ60MHz */
+    clk_hse_ok = 0;
+    RCC_OscInitStruct = (RCC_OscInitTypeDef){0};
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSEState = RCC_HSE_OFF;
+    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+    RCC_OscInitStruct.PLL.PLLM = 8;
+    RCC_OscInitStruct.PLL.PLLN = 60;
+    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+    RCC_OscInitStruct.PLL.PLLQ = 2;
+    RCC_OscInitStruct.PLL.PLLR = 2;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
+      Error_Handler();
+    }
   }
 
   /** Initializes the CPU, AHB and APB buses clocks

@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "can.h"
 
 /* USER CODE END Includes */
 
@@ -31,6 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define SEND_PERIOD_MS 10
 
 /* USER CODE END PD */
 
@@ -94,6 +96,10 @@ int main(void)
   MX_CAN_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  if (HAL_CAN_Start(&hcan) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
@@ -104,6 +110,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // ボタンはプルアップ入力なので押下でLOW
+    can_command_data_t com = {.id = CAN_ID_CONTROLLER};
+    com.data.con.raw = 0;
+    com.data.con.left  = (HAL_GPIO_ReadPin(LEFT_GPIO_Port,  LEFT_Pin)  == GPIO_PIN_RESET);
+    com.data.con.right = (HAL_GPIO_ReadPin(RIGHT_GPIO_Port, RIGHT_Pin) == GPIO_PIN_RESET);
+    com.data.con.up    = (HAL_GPIO_ReadPin(UP_GPIO_Port,    UP_Pin)    == GPIO_PIN_RESET);
+    com.data.con.down  = (HAL_GPIO_ReadPin(DOWN_GPIO_Port,  DOWN_Pin)  == GPIO_PIN_RESET);
+    com.data.con.cat   = (HAL_GPIO_ReadPin(CATCH_GPIO_Port, CATCH_Pin) == GPIO_PIN_RESET);
+
+    // 送信失敗(バス未接続など)の間はLED消灯
+    HAL_StatusTypeDef ret = stm_can_send(&hcan, &com);
+    HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin,
+                      ret == HAL_OK ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_Delay(SEND_PERIOD_MS);
   }
   /* USER CODE END 3 */
 }

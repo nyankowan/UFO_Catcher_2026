@@ -16,7 +16,7 @@ typedef enum{
 }can_id_t;
 
 typedef union{
-    uint8_t;
+    uint8_t raw;
     struct{
         uint8_t left    :1;
         uint8_t right   :1;
@@ -24,8 +24,13 @@ typedef union{
         uint8_t down    :1;
         uint8_t cat     :1;
         uint8_t reserved:3;
-    }
+    };
 }controller_data_t;
+
+//Robomas (C610/C620) current command: motor1..4 as big-endian int16
+typedef struct{
+    int16_t current[4];
+}robomas_send_t;
 
 typedef union{
     uint8_t raw[CAN_DLC_MAX];
@@ -40,7 +45,7 @@ typedef struct{
 static inline can_dlc_t can_protocol_get_dlc(can_id_t id)
 {
     switch (id) {
-    case CAN_ID_ROBOMAS_SEND;
+    case CAN_ID_ROBOMAS_SEND:
         return 8;
 
     case CAN_ID_CONTROLLER:
@@ -51,13 +56,18 @@ static inline can_dlc_t can_protocol_get_dlc(can_id_t id)
     }
 }
 
+static inline void can_protocol_pack_robomas(can_data_t *d, const int16_t current[4])
+{
+    for (int i = 0; i < 4; i++) {
+        d->raw[i * 2]     = (uint8_t)((uint16_t)current[i] >> 8);
+        d->raw[i * 2 + 1] = (uint8_t)((uint16_t)current[i] & 0xFF);
+    }
+}
 
-_Static_assert(sizeof(lower_arm_t) <= CAN_DLC_MAX,
-               "lower_arm_t is too large");
-
-_Static_assert(sizeof(upper_arm_t) <= CAN_DLC_MAX,
-               "upper_arm_t is too large");
+_Static_assert(sizeof(controller_data_t) == 1,
+               "controller_data_t must be 1 byte");
 
 _Static_assert(sizeof(can_data_t) == CAN_DLC_MAX,
                "can_data_t must be exactly 8 bytes");
+
 #endif //CAN_PROTOCOL_H

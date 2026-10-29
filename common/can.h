@@ -1,6 +1,7 @@
 #ifndef CAN_H
 #define CAN_H
 
+#include "main.h"
 #include "can_protocol.h"
 HAL_StatusTypeDef stm_can_send(
     CAN_HandleTypeDef *hcan,

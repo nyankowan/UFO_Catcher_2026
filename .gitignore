@@ -26,3 +26,4 @@ build/
 .settings/
 .vscode/
 main_controller/.gitignore
+controller_data_sender/.gitignore

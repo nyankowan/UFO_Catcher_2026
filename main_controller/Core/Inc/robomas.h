@@ -16,6 +16,7 @@ typedef struct {
     uint8_t  temp;
     int32_t  total;       // 最初のフィードバックを0とした多回転累積角度
     uint32_t last_rx_ms;
+    uint32_t count;       // 受信フレーム数(デバッグ用)
     bool     valid;
 } robomas_fb_t;
 

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-// 爪用サーボ(PC5)。TIM2割り込みによるソフトウェアPWM(50Hz)
+// 爪用サーボ(PC5)。TIM1+DMAによるPWM(50Hz)
 #define SERVO_PORT      GPIOC
 #define SERVO_PIN       GPIO_PIN_5
 

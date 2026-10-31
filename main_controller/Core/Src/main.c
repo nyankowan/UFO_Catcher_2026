@@ -46,8 +46,8 @@ typedef enum {
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // 爪サーボのパルス幅[us]。実機で要調整
-#define SERVO_OPEN_US   1000
-#define SERVO_CLOSE_US  2000
+#define SERVO_OPEN_US   2500
+#define SERVO_CLOSE_US  500
 // Robomas(0x200)のモータ割当: 1=X, 2=Y, 3=Z(アーム昇降)。爪はサーボ(PC5)
 #define MOTOR_X     0
 #define MOTOR_Y     1
@@ -64,7 +64,7 @@ typedef enum {
 
 // Z: 位置制御(位置P -> 回転数PI)。単位はロータ軸のエンコーダ値(8192=1回転)
 // 電源投入時のアーム位置(上端)を0とする。下降側は負方向を想定
-#define Z_DOWN_POS      (-100000)
+#define Z_DOWN_POS      (-1300000)
 #define Z_UP_POS        0
 #define Z_MAX_RPM       2000.0f
 #define Z_KP_POS        0.05f    // [rpm/エンコーダ値]
@@ -78,9 +78,9 @@ typedef enum {
 #define FB_TIMEOUT_MS   100      // ロボマスのフィードバック途絶で電流0
 
 // シーケンスの各時間[ms]。実機で要調整
-#define T_LOWER_MAX_MS  5000     // 下降の到達待ち上限
+#define T_LOWER_MAX_MS  15000     // 下降の到達待ち上限
 #define T_GRAB_MS       1000
-#define T_RAISE_MAX_MS  5000     // 上昇の到達待ち上限
+#define T_RAISE_MAX_MS  15000     // 上昇の到達待ち上限
 #define T_HOME_MAX_MS   10000
 #define T_RELEASE_MS    1000
 
@@ -116,6 +116,10 @@ static volatile uint32_t dbg_rx_id;
 static volatile uint8_t  dbg_rx_dlc;
 static volatile uint8_t  dbg_rx_d0;
 
+static volatile uint32_t dbg_tx2_fail;   // CAN2(ロボマス)送信の失敗回数
+static volatile uint32_t dbg_c2_lec[8];  // CAN2のエラー種別ごとの発生回数(1=stuff 2=form 3=ack 4=bit1 5=bit0 6=crc)
+static volatile uint32_t dbg_c2_boff;    // CAN2のバスオフに入った回数
+static int16_t dbg_cur[4];               // 最後にロボマスへ送った電流指令
 static uint8_t clk_hse_ok = 1;   // 0ならHSE起動失敗でHSIにフォールバックした
 
 static float xy_tgt[2];   // XY目標回転数
@@ -137,6 +141,7 @@ static void can_rx_init(void);
 static void can_rx_poll(void);
 static void set_state(ufo_state_t next);
 static void debug_print(void);
+static void can2_error_watch(void);
 static void control_step(void);
 static void actuate(int16_t cur[4]);
 
@@ -191,6 +196,21 @@ static void set_state(ufo_state_t next)
   if (next == UFO_RELEASE) servo_set_pulse_us(SERVO_OPEN_US);
 }
 
+// CAN2のエラー種別(LEC)とバスオフを数える。毎ループ呼ぶ
+static void can2_error_watch(void)
+{
+  static uint32_t prev_boff;
+  uint32_t esr = hcan2.Instance->ESR;
+  uint32_t lec = (esr >> 4) & 7;
+  if (lec) {
+    dbg_c2_lec[lec]++;
+    hcan2.Instance->ESR = 0;  // LECをクリア(次のエラーを検出できるように)
+  }
+  uint32_t boff = esr & CAN_ESR_BOFF;
+  if (boff && !prev_boff) dbg_c2_boff++;
+  prev_boff = boff;
+}
+
 // 100msごとに状態を1行出力する(ノンブロッキング)
 static void debug_print(void)
 {
@@ -201,16 +221,25 @@ static void debug_print(void)
 
   // ESR: LEC[6:4]=最後のエラー種別, BOFF[2], EPVF[1], EWGF[0], TEC[23:16], REC[31:24]
   uint32_t esr = hcan1.Instance->ESR;
-  char line[192];
+  char line[400];
   int n = snprintf(line, sizeof(line),
       "clk=%s CAN1 n=%lu id=0x%03lX dlc=%u d0=%02X age=%lums esr=%08lX | "
-      "L%d R%d U%d D%d C%d | st=%d | fb=%d%d%d rpm=%d,%d,%d z=%ld\r\n",
+      "L%d R%d U%d D%d C%d | st=%d | fb=%d%d%d n=%lu,%lu,%lu rpm=%d,%d,%d z=%ld | "
+      "lim=%d%d%d%d cur=%d,%d,%d c2esr=%08lX tx2fail=%lu c2boff=%lu c2lec=%lu,%lu,%lu,%lu,%lu,%lu\r\n",
       clk_hse_ok ? "HSE" : "HSI", (unsigned long)dbg_rx_count, (unsigned long)dbg_rx_id, dbg_rx_dlc, dbg_rx_d0,
       (unsigned long)(now - con_last_rx_ms), (unsigned long)esr,
       con.left, con.right, con.up, con.down, con.cat, (int)state,
       robomas_alive(0, FB_TIMEOUT_MS), robomas_alive(1, FB_TIMEOUT_MS), robomas_alive(2, FB_TIMEOUT_MS),
+      (unsigned long)robomas_fb[0].count, (unsigned long)robomas_fb[1].count,
+      (unsigned long)robomas_fb[2].count,
       robomas_fb[0].rpm, robomas_fb[1].rpm, robomas_fb[2].rpm,
-      (long)robomas_fb[MOTOR_ARM].total);
+      (long)robomas_fb[MOTOR_ARM].total,
+      LIM_PRESSED(LEFT_LIM), LIM_PRESSED(RIGHT_LIM), LIM_PRESSED(UP_LIM), LIM_PRESSED(DOWN_LIM),
+      dbg_cur[0], dbg_cur[1], dbg_cur[2],
+      (unsigned long)hcan2.Instance->ESR, (unsigned long)dbg_tx2_fail,
+      (unsigned long)dbg_c2_boff,
+      (unsigned long)dbg_c2_lec[1], (unsigned long)dbg_c2_lec[2], (unsigned long)dbg_c2_lec[3],
+      (unsigned long)dbg_c2_lec[4], (unsigned long)dbg_c2_lec[5], (unsigned long)dbg_c2_lec[6]);
   if (n > 0) debug_write(line, (size_t)n);
 }
 
@@ -254,9 +283,9 @@ static void control_step(void)
 
   case UFO_HOME: {
     bool x_done = LIM_PRESSED(LEFT_LIM);
-    bool y_done = LIM_PRESSED(UP_LIM);
+    bool y_done = LIM_PRESSED(DOWN_LIM);
     if (!x_done) xy_tgt[MOTOR_X] = -XY_HOME_RPM;
-    if (!y_done) xy_tgt[MOTOR_Y] =  XY_HOME_RPM;
+    if (!y_done) xy_tgt[MOTOR_Y] = -XY_HOME_RPM;
     if ((x_done && y_done) || elapsed >= T_HOME_MAX_MS) set_state(UFO_RELEASE);
     break;
   }
@@ -343,6 +372,10 @@ int main(void)
   hcan1.Init.Mode = CAN_MODE_LOOPBACK;
   if (HAL_CAN_Init(&hcan1) != HAL_OK) Error_Handler();
 #endif
+  // CAN2(ロボマス)はバスオフに入っても自動復帰させる
+  HAL_CAN_DeInit(&hcan2);
+  hcan2.Init.AutoBusOff = ENABLE;
+  if (HAL_CAN_Init(&hcan2) != HAL_OK) Error_Handler();
   can_rx_init();
   servo_init(SERVO_OPEN_US);
   debug_init();
@@ -362,6 +395,7 @@ int main(void)
     if (HAL_GetTick() - con_last_rx_ms > CON_TIMEOUT_MS) {
       con.raw = 0;  // 通信断中はMANUALで全停止。シーケンス実行中はそのまま完了させる
     }
+    can2_error_watch();
     debug_print();
 #ifdef CAN_SELFTEST
     {
@@ -379,7 +413,8 @@ int main(void)
 
     can_command_data_t com = {.id = CAN_ID_ROBOMAS_SEND};
     can_protocol_pack_robomas(&com.data, cur);
-    stm_can_send(&hcan2, &com);
+    if (stm_can_send(&hcan2, &com) != HAL_OK) dbg_tx2_fail++;
+    for (int i = 0; i < 4; i++) dbg_cur[i] = cur[i];
     // STATUS_LED(PA5): 上下左右・キャッチのいずれかが入力されている間だけ点灯
     bool any_input = con.left || con.right || con.up || con.down || con.cat;
     HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, any_input ? GPIO_PIN_SET : GPIO_PIN_RESET);

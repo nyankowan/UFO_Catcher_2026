@@ -42,6 +42,7 @@ void robomas_rx_poll(CAN_HandleTypeDef *hcan)
     m->current = (int16_t)((d[4] << 8) | d[5]);
     m->temp = d[6];
     m->last_rx_ms = HAL_GetTick();
+    m->count++;
     m->valid = true;
   }
 }

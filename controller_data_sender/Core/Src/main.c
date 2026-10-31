@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "can.h"
 
 /* USER CODE END Includes */
 
@@ -31,6 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define SEND_PERIOD_MS 10
 
 /* USER CODE END PD */
 
@@ -94,6 +96,10 @@ int main(void)
   MX_CAN_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  if (HAL_CAN_Start(&hcan) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
@@ -104,6 +110,21 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // ボタンはプルアップ入力なので押下でLOW
+    can_command_data_t com = {.id = CAN_ID_CONTROLLER};
+    com.data.con.raw = 0;
+    com.data.con.left  = (HAL_GPIO_ReadPin(LEFT_GPIO_Port,  LEFT_Pin)  == GPIO_PIN_RESET);
+    com.data.con.right = (HAL_GPIO_ReadPin(RIGHT_GPIO_Port, RIGHT_Pin) == GPIO_PIN_RESET);
+    com.data.con.up    = (HAL_GPIO_ReadPin(UP_GPIO_Port,    UP_Pin)    == GPIO_PIN_RESET);
+    com.data.con.down  = (HAL_GPIO_ReadPin(DOWN_GPIO_Port,  DOWN_Pin)  == GPIO_PIN_RESET);
+    com.data.con.cat   = (HAL_GPIO_ReadPin(CATCH_GPIO_Port, CATCH_Pin) == GPIO_PIN_RESET);
+
+    stm_can_send(&hcan, &com);
+
+    // STATUS_LED: いずれかのボタンが押されている間だけ点灯
+    HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin,
+                      com.data.con.raw ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_Delay(SEND_PERIOD_MS);
   }
   /* USER CODE END 3 */
 }
@@ -116,24 +137,36 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  uint32_t sysclk_src = RCC_SYSCLKSOURCE_HSE;
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_BYPASS;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    Error_Handler();
+    /* HSE(ST-LINKのMCO)が立ち上がらないときはHSIで動かす。システムクロックは同じ8MHz */
+    sysclk_src = RCC_SYSCLKSOURCE_HSI;
+    RCC_OscInitStruct = (RCC_OscInitTypeDef){0};
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSEState = RCC_HSE_OFF;
+    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
+      Error_Handler();
+    }
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = sysclk_src;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
@@ -236,17 +269,17 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(STATUS_LED_GPIO_Port, STATUS_LED_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : UP_Pin DOWN_Pin LEFT_Pin RIGHT_Pin */
-  GPIO_InitStruct.Pin = UP_Pin|DOWN_Pin|LEFT_Pin|RIGHT_Pin;
+  /*Configure GPIO pins : DOWN_Pin RIGHT_Pin LEFT_Pin CATCH_Pin */
+  GPIO_InitStruct.Pin = DOWN_Pin|RIGHT_Pin|LEFT_Pin|CATCH_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : CATCH_Pin */
-  GPIO_InitStruct.Pin = CATCH_Pin;
+  /*Configure GPIO pin : UP_Pin */
+  GPIO_InitStruct.Pin = UP_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(CATCH_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(UP_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : STATUS_LED_Pin */
   GPIO_InitStruct.Pin = STATUS_LED_Pin;
